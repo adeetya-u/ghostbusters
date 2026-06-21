@@ -49,11 +49,21 @@
 			);
 			target = D4AD90672FE853F00022D8A3 /* ghostbusters MessagesExtension */;
 		};
+		D4AD90822FE853F20022D8A3 /* Exceptions for "ghostbusters" folder in "ghostbusters" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D4AD905E2FE853EE0022D8A3 /* ghostbusters */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		D4AD90612FE853EE0022D8A3 /* ghostbusters */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D4AD90822FE853F20022D8A3 /* Exceptions for "ghostbusters" folder in "ghostbusters" target */,
+			);
 			path = ghostbusters;
 			sourceTree = "<group>";
 		};
@@ -113,6 +123,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = D4AD907F2FE853F20022D8A3 /* Build configuration list for PBXNativeTarget "ghostbusters" */;
 			buildPhases = (
+				D4AD90832FE853F20022D8A3 /* Sources */,
 				D4AD905D2FE853EE0022D8A3 /* Resources */,
 				D4AD907E2FE853F20022D8A3 /* Embed Foundation Extensions */,
 			);
@@ -129,7 +140,7 @@
 			);
 			productName = ghostbusters;
 			productReference = D4AD905F2FE853EE0022D8A3 /* ghostbusters.app */;
-			productType = "com.apple.product-type.application.messages";
+			productType = "com.apple.product-type.application";
 		};
 		D4AD90672FE853F00022D8A3 /* ghostbusters MessagesExtension */ = {
 			isa = PBXNativeTarget;
@@ -190,6 +201,16 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D4AD90832FE853F20022D8A3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		D4AD905D2FE853EE0022D8A3 /* Resources */ = {
@@ -409,6 +430,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ghostbusters/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Ghostbusters;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -431,6 +454,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ghostbusters/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Ghostbusters;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

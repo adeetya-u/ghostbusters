@@ -7,7 +7,23 @@
 		<key>NSExtensionMainStoryboard</key>
 		<string>MainInterface</string>
 		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.message-payload-provider</string>
+		<string>com.apple.message-ui</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>MSMessageExtensionCategory</key>
+			<string>interactive</string>
+			<key>MSMessageExtensionLaunchPresentationStyle</key>
+			<string>expanded</string>
+			<key>MSSupportedPresentationContexts</key>
+			<array>
+				<string>MSMessagesAppPresentationContextMessages</string>
+			</array>
+		</dict>
+	</dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
 	</dict>
 </dict>
 </plist>

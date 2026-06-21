@@ -1,0 +1,28 @@
+# Environment & secrets
+.env
+connector/.env
+
+# Python
+connector/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Generated / local data
+connector/dummy_chat.db
+
+# Xcode user-specific
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Debug screenshots
+ghostbusters-inbox-screenshot*.png
