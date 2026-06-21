@@ -1,20 +1,72 @@
 """
-Priority ranking stub — placeholder until the backend algorithm is ready.
+Priority ranking and HydraDB-backed reply suggestions.
 
-The real algorithm (owned by backend team) will:
-  - Score conversations by severity, importance, and urgency
-  - Generate personalized response suggestions
-  - Factor in HydraDB memory context and user preferences
-
-For now we surface the top 3 chats that need a reply (inbound, recent, unread-ish).
+Ranking uses services/ranker.py. Reply text is generated only via HydraDB context
+retrieval (thinking + graph) followed by LLM synthesis from that context.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from imessage.reader import ChatSummary, IMessageReader
+from services.hydra_generation import (
+    HydraGenerationError,
+    generate_chat_reply_suggestions,
+    hydra_generation_configured,
+)
+from services.ranker import rank_chats
+
+
+class SuggestionGenerationError(Exception):
+    """Raised when reply generation fails."""
+
+
+def generate_chat_reply_suggestions_for_chat(chat: ChatSummary, count: int = 3) -> list[str]:
+    """Public wrapper mapping HydraDB generation errors to API errors."""
+    try:
+        return generate_chat_reply_suggestions(chat, count=count)
+    except HydraGenerationError as exc:
+        raise SuggestionGenerationError(str(exc)) from exc
+
+
+def find_chat_for_suggestions(
+    reader: IMessageReader,
+    *,
+    chat_id: str | None = None,
+    chat_guid: str | None = None,
+) -> ChatSummary | None:
+    chats = reader.list_recent_chats(limit=50)
+    if chat_id:
+        match = next((c for c in chats if c.chat_id == chat_id), None)
+        if match:
+            return match
+    if chat_guid:
+        return next((c for c in chats if c.chat_guid == chat_guid), None)
+    return None
+
+
+def nebius_configured() -> bool:
+    """True when HydraDB + LLM synthesis pipeline is configured."""
+    return hydra_generation_configured()
+
+
+def verify_nebius() -> str:
+    """Smoke-test HydraDB-backed reply generation."""
+    sample = ChatSummary(
+        chat_id="verify",
+        chat_guid="verify",
+        display_name="Alex",
+        contact_handle="alex",
+        last_message="Hey, are we still on for dinner tomorrow?",
+        last_message_at=datetime.now(),
+        is_from_me=False,
+        needs_reply=True,
+        reply_to_message="Hey, are we still on for dinner tomorrow?",
+    )
+    return generate_chat_reply_suggestions_for_chat(sample, count=1)[0]
 
 
 @dataclass
@@ -27,97 +79,95 @@ class ResponsePriority:
     last_message_preview: str
     last_message_at: datetime
     suggested_response: str
-    # Backend algorithm will populate these properly:
-    severity: str  # low | medium | high | critical
-    importance_score: float  # 0.0 – 1.0
+    severity: str
+    importance_score: float
+    reply_waiting_at: datetime | None = None
 
 
-import json
-import os
-import ssl
-import urllib.request
+def _chat_to_priority(
+    reader: IMessageReader,
+    chat: ChatSummary,
+    rank: int,
+    *,
+    importance_score: float | None = None,
+    severity: str | None = None,
+) -> ResponsePriority:
+    from services.suggestion_cache import get_chat_suggestions
 
+    if importance_score is None or severity is None:
+        scored = rank_chats([chat], reader=reader)[0]
+        importance_score = scored.score
+        severity = scored.severity
 
-NEBIUS_API_KEY = os.environ.get("NEBIUS_API_KEY", "")
-
-def _generate_blurb_nebius(chat: ChatSummary) -> str:
-    """Generates a blurb using Nebius LLM."""
-    chat_text = chat.last_message
-    if not chat_text.strip():
-        return "No message."
-    if not NEBIUS_API_KEY:
-        return f"Follow up on: \"{chat_text[:80]}\""
-    url = "https://api.studio.nebius.ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {NEBIUS_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "meta-llama/Llama-3.3-70B-Instruct",
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a helpful assistant that generates a very brief (1-line) suggested response for an iMessage. Return ONLY the suggested response text, with no quotes or extra formatting."
-            },
-            {
-                "role": "user",
-                "content": f"Here is the last message I received: {chat_text}"
-            }
-        ],
-        "max_tokens": 50,
-        "temperature": 0.5
-    }
-    
-    req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return result['choices'][0]['message']['content'].strip()
-    except Exception as e:
-        return f"Follow up on: \"{chat_text[:80]}\""
-
-
-def _severity_stub(chat: ChatSummary, rank: int) -> tuple[str, float]:
-    """Placeholder scoring — backend team replaces this."""
-    base = max(0.3, 1.0 - (rank - 1) * 0.15)
-    if not chat.is_from_me and chat.unread_count > 0:
-        base += 0.1
-    if "?" in chat.last_message:
-        base += 0.05
-    severity = "high" if base >= 0.85 else "medium" if base >= 0.6 else "low"
-    return severity, round(min(base, 1.0), 2)
-
-
-def _rank_candidates(chats: list[ChatSummary]) -> list[ChatSummary]:
-    """Prefer inbound messages that likely need a reply."""
-    candidates = [c for c in chats if not c.is_from_me and c.last_message.strip()]
-    candidates.sort(key=lambda c: c.last_message_at, reverse=True)
-    return candidates
-
-
-def _chat_to_priority(chat: ChatSummary, rank: int) -> ResponsePriority:
-    severity, score = _severity_stub(chat, rank)
+    preview = chat.reply_to_message[:120] if chat.needs_reply else chat.last_message[:120]
+    if chat.is_group and chat.reply_to_sender:
+        preview = f"{chat.reply_to_sender}: {preview}"
+    suggestions = get_chat_suggestions(reader, chat, count=3)
     return ResponsePriority(
         rank=rank,
         contact_name=chat.display_name,
         contact_handle=chat.contact_handle,
         chat_id=chat.chat_id,
         chat_guid=chat.chat_guid,
-        last_message_preview=chat.last_message[:120],
+        last_message_preview=preview,
         last_message_at=chat.last_message_at,
-        suggested_response=_generate_blurb_nebius(chat),
+        reply_waiting_at=chat.reply_waiting_at,
+        suggested_response=suggestions[0],
         severity=severity,
-        importance_score=score,
+        importance_score=importance_score,
     )
+
+
+def build_fast_priorities(reader: IMessageReader, limit: int = 3) -> list[ResponsePriority]:
+    """Return ranked priorities immediately using any cached suggestions."""
+    from services.suggestion_cache import peek_chat_suggestion
+
+    chats = reader.list_recent_chats(limit=30)
+    ranked = rank_chats(chats, reader=reader)[:limit]
+    items: list[ResponsePriority] = []
+    for rank, item in enumerate(ranked, start=1):
+        chat = item.chat
+        preview = chat.reply_to_message[:120] if chat.needs_reply else chat.last_message[:120]
+        if chat.is_group and chat.reply_to_sender:
+            preview = f"{chat.reply_to_sender}: {preview}"
+        suggestion = peek_chat_suggestion(chat) or "Generating reply…"
+        items.append(
+            ResponsePriority(
+                rank=rank,
+                contact_name=chat.display_name,
+                contact_handle=chat.contact_handle,
+                chat_id=chat.chat_id,
+                chat_guid=chat.chat_guid,
+                last_message_preview=preview,
+                last_message_at=chat.last_message_at,
+                reply_waiting_at=chat.reply_waiting_at,
+                suggested_response=suggestion,
+                severity=item.severity,
+                importance_score=item.score,
+            )
+        )
+    return items
 
 
 def get_top_priorities(reader: IMessageReader, limit: int = 3) -> list[ResponsePriority]:
     chats = reader.list_recent_chats(limit=30)
-    top = _rank_candidates(chats)[:limit]
-    return [_chat_to_priority(chat, i) for i, chat in enumerate(top, start=1)]
+    ranked = rank_chats(chats, reader=reader)[:limit]
+
+    def build(args: tuple[int, object]) -> ResponsePriority:
+        rank, item = args
+        return _chat_to_priority(
+            reader,
+            item.chat,
+            rank,
+            importance_score=item.score,
+            severity=item.severity,
+        )
+
+    if len(ranked) <= 1:
+        return [build((i, item)) for i, item in enumerate(ranked, start=1)]
+
+    with ThreadPoolExecutor(max_workers=min(limit, len(ranked))) as pool:
+        return list(pool.map(build, enumerate(ranked, start=1)))
 
 
 def get_priority_for_chat(
@@ -126,7 +176,6 @@ def get_priority_for_chat(
     chat_id: str | None = None,
     chat_guid: str | None = None,
 ) -> ResponsePriority | None:
-    """Return a recommendation scoped to a single conversation."""
     chats = reader.list_recent_chats(limit=50)
     match: ChatSummary | None = None
 
@@ -135,77 +184,15 @@ def get_priority_for_chat(
     if not match and chat_guid:
         match = next((c for c in chats if c.chat_guid == chat_guid), None)
 
-    if not match:
+    if not match or not match.needs_reply or not match.reply_to_message.strip():
         return None
 
-    if match.is_from_me or not match.last_message.strip():
-        return None
-
-    return _chat_to_priority(match, rank=1)
-
-
-def demo_priorities() -> list[ResponsePriority]:
-    """Fallback when chat.db is unavailable (e.g. no Full Disk Access)."""
-    now = datetime.now(tz=timezone.utc)
-    return [
-        ResponsePriority(
-            rank=1,
-            contact_name="Alex Chen",
-            contact_handle="+15551234567",
-            chat_id="3",
-            chat_guid="iMessage;-;+15551234567",
-            last_message_preview="Hey, are we still on for dinner tomorrow?",
-            last_message_at=now,
-            suggested_response="Yes, 7pm at the Thai place on 5th works for me!",
-            severity="high",
-            importance_score=0.92,
-        ),
-        ResponsePriority(
-            rank=2,
-            contact_name="Mom",
-            contact_handle="+15559876543",
-            chat_id="4",
-            chat_guid="iMessage;-;+15559876543",
-            last_message_preview="Call me when you get a chance",
-            last_message_at=now - timedelta(minutes=30),
-            suggested_response="I'll call you tonight around 8 — is that okay?",
-            severity="medium",
-            importance_score=0.78,
-        ),
-        ResponsePriority(
-            rank=3,
-            contact_name="Work Group",
-            contact_handle="chat-work-deck",
-            chat_id="11",
-            chat_guid="iMessage;+;chat-work-deck",
-            last_message_preview="Can someone review the deck before 3pm?",
-            last_message_at=now - timedelta(hours=3),
-            suggested_response="I can review it at 2pm and send feedback before 3.",
-            severity="medium",
-            importance_score=0.71,
-        ),
-        ResponsePriority(
-            rank=4,
-            contact_name="Sam Rivera",
-            contact_handle="+15552345678",
-            chat_id="5",
-            chat_guid="iMessage;-;+15552345678",
-            last_message_preview="Can you cover my shift Friday? I have a concert",
-            last_message_at=now - timedelta(minutes=90),
-            suggested_response="Let me check my schedule and get back to you tonight.",
-            severity="medium",
-            importance_score=0.68,
-        ),
-        ResponsePriority(
-            rank=5,
-            contact_name="Morgan (Recruiter)",
-            contact_handle="+15554443322",
-            chat_id="7",
-            chat_guid="iMessage;-;+15554443322",
-            last_message_preview="Absolutely — 30 min call this week?",
-            last_message_at=now - timedelta(hours=1),
-            suggested_response="Thursday afternoon works — send me a calendar invite.",
-            severity="low",
-            importance_score=0.55,
-        ),
-    ]
+    ranked = rank_chats([match], reader=reader)
+    item = ranked[0]
+    return _chat_to_priority(
+        reader,
+        item.chat,
+        rank=1,
+        importance_score=item.score,
+        severity=item.severity,
+    )

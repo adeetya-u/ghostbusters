@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct InboxView: View {
+    @Environment(PrioritiesStore.self) private var prioritiesStore
     @State private var chats: [ChatSummary] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -21,44 +22,50 @@ struct InboxView: View {
                     }
                 } else {
                     List {
-                        Section {
-                            NavigationLink(value: InboxDestination.ghostbusters) {
-                                PinnedGhostbustersRow()
-                            }
-                        } header: {
-                            Label("Pinned", systemImage: "pin.fill")
+                        NavigationLink(value: InboxDestination.ghostbusters) {
+                            PinnedGhostbustersRow()
                         }
+                        .listRowBackground(Color(.systemBackground))
 
-                        Section("Messages") {
-                            ForEach(chats) { chat in
-                                NavigationLink(value: InboxDestination.chat(chat)) {
-                                    ChatRow(chat: chat)
-                                }
+                        ForEach(chats) { chat in
+                            NavigationLink(value: InboxDestination.chat(chat: chat, prefilledDraft: "")) {
+                                ChatRow(chat: chat)
                             }
+                            .listRowBackground(Color(.systemBackground))
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(.systemBackground))
                 }
             }
             .navigationTitle("Messages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(Color(.systemBackground), for: .navigationBar)
             .navigationDestination(for: InboxDestination.self) { dest in
                 switch dest {
                 case .ghostbusters:
-                    GhostbustersChatView(onOpenChat: { chat in
-                        path.append(InboxDestination.chat(chat))
+                    GhostbustersChatView(onOpenChat: { chat, draft in
+                        path.append(InboxDestination.chat(chat: chat, prefilledDraft: draft))
                     })
-                case .chat(let chat):
-                    ChatThreadView(chat: chat)
+                case .chat(let chat, let prefilledDraft):
+                    ChatThreadView(chat: chat, initialDraft: prefilledDraft)
                 }
             }
             .refreshable { await load() }
         }
+        .background(Color(.systemBackground))
         .task { await load() }
+        .onAppear {
+            prioritiesStore.prefetchIfNeeded()
+        }
     }
 
     private func load() async {
         isLoading = chats.isEmpty
         errorMessage = nil
+        prioritiesStore.prefetchIfNeeded()
         do {
             chats = try await ConnectorClient.fetchChats(limit: 30)
         } catch {
@@ -119,21 +126,28 @@ struct ChatRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(chat.display_name)
-                        .font(.body.weight(chat.is_from_me ? .regular : .semibold))
+                        .font(.body.weight(chat.needs_reply ? .semibold : .regular))
                         .lineLimit(1)
                     Spacer()
-                    Text(Formatters.time(chat.last_message_at))
+                    Text(chat.inboxTimestamp)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(chat.needs_reply ? .primary : .secondary)
                 }
 
-                Text(chat.is_from_me ? "You: \(chat.last_message)" : chat.last_message)
+                Text(previewText)
                     .font(.subheadline)
-                    .foregroundStyle(chat.is_from_me ? .secondary : .primary)
+                    .foregroundStyle(chat.needs_reply ? .primary : .secondary)
                     .lineLimit(1)
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var previewText: String {
+        if chat.is_from_me {
+            return "You: \(chat.last_message)"
+        }
+        return chat.last_message
     }
 }
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import shutil
 
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
@@ -84,32 +86,58 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
                 (chat_id, msg_id),
             )
 
+    def insert_group_messages(
+        chat_id: int,
+        messages: list[tuple[str, int, bool, datetime, bool]],
+    ) -> None:
+        for text, handle_id, is_from_me, ts, is_read in messages:
+            cur.execute(
+                """
+                INSERT INTO message (text, is_from_me, is_read, date, handle_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (text, int(is_from_me), int(is_read), _apple_ts(ts), handle_id),
+            )
+            msg_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+                (chat_id, msg_id),
+            )
+
     # --- 1-on-1 conversations -------------------------------------------------
 
     jordan_handle = insert_handle("+18885551212")
-    jordan_chat = insert_chat("iMessage;-;+18885551212", "+1 (888) 555-1212", "+18885551212")
+    jordan_chat = insert_chat("iMessage;-;+18885551212", "Jordan Adams", "+18885551212")
     insert_messages(
         jordan_chat,
         jordan_handle,
         [
-            ("Hey! Are you free this weekend?", False, now - timedelta(hours=6), True),
-            ("Maybe — what's up?", True, now - timedelta(hours=5, minutes=45), True),
-            ("A few of us are doing brunch Saturday. You in?", False, now - timedelta(hours=5, minutes=30), True),
+            ("Did you end up trying that ramen place on Valencia?", False, now - timedelta(days=2), True),
+            ("Yeah twice actually. The spicy miso is legit", True, now - timedelta(days=2), True),
+            ("Ok I'm convinced. Hey! Are you free this weekend?", False, now - timedelta(hours=6), True),
+            ("Maybe, what's up?", True, now - timedelta(hours=5, minutes=45), True),
+            ("A few of us are doing brunch at Tartine Saturday. You in?", False, now - timedelta(hours=5, minutes=30), True),
             ("Sounds fun! What time?", True, now - timedelta(hours=5), True),
-            ("Hi!", False, now - timedelta(minutes=3), False),
         ],
     )
 
     kelly_handle = insert_handle("+15555648583")
-    kelly_chat = insert_chat("iMessage;-;+15555648583", "+1 (555) 564-8583", "+15555648583")
+    kelly_chat = insert_chat("iMessage;-;+15555648583", "Kelly Brooks", "+15555648583")
     insert_messages(
         kelly_chat,
         kelly_handle,
         [
+            ("Client kickoff got moved to Monday 9am btw", False, now - timedelta(days=2), True),
+            ("Ugh ok. I'll shuffle the deck outline tonight", True, now - timedelta(days=2), True),
             ("Did you finish the slides for Monday?", False, now - timedelta(days=1, hours=2), True),
-            ("Almost — sending tonight", True, now - timedelta(days=1), True),
-            ("Great, the client asked for a pricing section too", False, now - timedelta(hours=8), True),
-            ("Hi!", False, now - timedelta(minutes=3), False),
+            ("Almost, sending tonight", True, now - timedelta(days=1), True),
+            (
+                "Great, the client asked for a pricing section too. "
+                "They want tier comparison + implementation timeline if you have it",
+                False,
+                now - timedelta(hours=8),
+                False,
+            ),
         ],
     )
 
@@ -121,8 +149,14 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         [
             ("Dinner tomorrow still on?", False, now - timedelta(hours=12), True),
             ("Yep! I was thinking that Thai place on 5th", True, now - timedelta(hours=11), True),
-            ("Perfect. 7pm?", False, now - timedelta(hours=10), True),
-            ("Hey, are we still on for dinner tomorrow?", False, now - timedelta(minutes=45), False),
+            ("Perfect. 7pm? I'll grab us a res under Adams", False, now - timedelta(hours=10), True),
+            (
+                "Hey, are we still on for dinner tomorrow? "
+                "Work ran long and I might be 10 min late",
+                False,
+                now - timedelta(minutes=45),
+                False,
+            ),
         ],
     )
 
@@ -132,9 +166,16 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         mom_chat,
         mom_handle,
         [
-            ("Happy birthday sweetie!! 🎂", False, now - timedelta(days=2), True),
-            ("Thanks mom!!", True, now - timedelta(days=2), True),
-            ("Call me when you get a chance", False, now - timedelta(hours=4), False),
+            ("Happy birthday sweetie!! 🎂 Did you get the cake?", False, now - timedelta(days=2), True),
+            ("Thanks mom!! Yes, roommates sang off-key at midnight", True, now - timedelta(days=2), True),
+            ("😂 sounds about right. Dad says hi", False, now - timedelta(days=1, hours=6), True),
+            (
+                "Call me when you get a chance. Nothing bad — "
+                "just want to hear how the new apartment is",
+                False,
+                now - timedelta(hours=4),
+                False,
+            ),
         ],
     )
 
@@ -146,8 +187,14 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         [
             ("Bro the game last night was insane", False, now - timedelta(days=1, hours=6), True),
             ("I know!! That last-minute goal", True, now - timedelta(days=1, hours=5), True),
-            ("We need tickets for the next one", False, now - timedelta(hours=2), True),
-            ("Can you cover my shift Friday? I have a concert", False, now - timedelta(minutes=90), False),
+            ("We need tickets for the next one — they're dropping Friday", False, now - timedelta(hours=2), True),
+            (
+                "Can you cover my shift Friday? I have a concert at the Fillmore "
+                "and I'm double-booked. I'll swap you Saturday AM",
+                False,
+                now - timedelta(minutes=90),
+                False,
+            ),
         ],
     )
 
@@ -157,9 +204,16 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         dr_chat,
         dr_handle,
         [
-            ("Reminder: annual checkup Thu 2pm", False, now - timedelta(days=3), True),
+            ("Reminder: annual checkup Thu 2pm with Dr. Patel", False, now - timedelta(days=3), True),
             ("Confirmed, thank you", True, now - timedelta(days=3), True),
-            ("Please arrive 15 min early for paperwork", False, now - timedelta(hours=20), False),
+            ("Please bring insurance card + list of current meds", False, now - timedelta(days=2), True),
+            (
+                "Please arrive 15 min early for paperwork. "
+                "Parking is in garage B, validation at front desk",
+                False,
+                now - timedelta(hours=20),
+                False,
+            ),
         ],
     )
 
@@ -169,9 +223,21 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         recruiter_chat,
         recruiter_handle,
         [
-            ("Hi! Saw your profile — interested in a senior role at Stripe?", False, now - timedelta(hours=6), True),
-            ("Thanks for reaching out! Can you share more details?", True, now - timedelta(hours=5), True),
-            ("Absolutely — 30 min call this week?", False, now - timedelta(hours=1), False),
+            (
+                "Hi! Saw your profile on LinkedIn. Interested in a senior backend role "
+                "at Stripe? Remote-friendly, infra team",
+                False,
+                now - timedelta(hours=6),
+                True,
+            ),
+            ("Thanks for reaching out! Can you share comp range + team size?", True, now - timedelta(hours=5), True),
+            (
+                "Absolutely — base is competitive plus equity. 30 min call this week? "
+                "I have Thu 11am or Fri 2pm PT",
+                False,
+                now - timedelta(hours=1),
+                False,
+            ),
         ],
     )
 
@@ -181,9 +247,25 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         dad_chat,
         dad_handle,
         [
-            ("Your car registration expires next month", False, now - timedelta(days=5), True),
+            ("How's the new place? Mom said the kitchen is tiny", False, now - timedelta(days=8), True),
+            ("Tiny but the light is great. Already hung shelves", True, now - timedelta(days=8), True),
+            (
+                "Your car registration on the Honda expires next month. "
+                "Don't wait till the last week like last year",
+                False,
+                now - timedelta(days=5),
+                True,
+            ),
             ("Thanks for the heads up", True, now - timedelta(days=5), True),
-            ("Sent you the DMV link", False, now - timedelta(days=4), True),
+            ("Did the smog check yet? AAA on Stevens Creek still does walk-ins", False, now - timedelta(days=4, hours=12), True),
+            ("Not yet, planning Saturday morning", True, now - timedelta(days=4, hours=10), True),
+            (
+                "Sent you the DMV link. Use the plate number ending in 442. "
+                "Insurance card photo is in the glove box if they ask",
+                False,
+                now - timedelta(days=4),
+                False,
+            ),
         ],
     )
 
@@ -193,9 +275,16 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         sarah_chat,
         sarah_handle,
         [
-            ("Reunion planning — who's in for July?", False, now - timedelta(days=2), True),
-            ("Count me in!", True, now - timedelta(days=2), True),
-            ("Venue options in the group doc", False, now - timedelta(days=1), True),
+            ("Reunion planning: who's in for July 4th weekend?", False, now - timedelta(days=2), True),
+            ("Count me in! Can bring the photo slideshow", True, now - timedelta(days=2), True),
+            ("Nice. Looking at Lake Tahoe vs Napa for Airbnb", False, now - timedelta(days=1, hours=6), True),
+            (
+                "Venue options in the group doc — leaning toward Tahoe. "
+                "Need headcount by Wed for the deposit",
+                False,
+                now - timedelta(days=1),
+                False,
+            ),
         ],
     )
 
@@ -205,46 +294,87 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         amazon_chat,
         amazon_handle,
         [
-            ("Your package was delivered to the front door", False, now - timedelta(hours=3), True),
+            ("Out for delivery: desk lamp (Order #112-8847291)", False, now - timedelta(hours=5), True),
+            (
+                "Your package was delivered to the front door at 2:14pm. "
+                "Photo proof available in the app",
+                False,
+                now - timedelta(hours=3),
+                False,
+            ),
         ],
     )
 
     # --- Group chats ----------------------------------------------------------
 
-    work_handle = insert_handle("chat-work-deck")
+    priya_handle = insert_handle("Priya Shah")
+    sarah_work_handle = insert_handle("Sarah Kim")
+    mike_handle = insert_handle("Mike Torres")
+    me_handle = insert_handle("Me")
+
     work_chat = insert_chat("iMessage;+;chat-work-deck", "Work Group", "chat-work-deck")
-    insert_messages(
+    insert_group_messages(
         work_chat,
-        work_handle,
         [
-            ("Standup moved to 10:30 today", False, now - timedelta(hours=7), True),
-            ("Got it", True, now - timedelta(hours=6, minutes=50), True),
-            ("Can someone review the deck before 3pm?", False, now - timedelta(hours=3), False),
-            ("I can take a look at 2", True, now - timedelta(hours=2, minutes=30), True),
+            ("Q4 planning doc is in Drive if anyone needs it", mike_handle, False, now - timedelta(hours=9), True),
+            ("Standup moved to 10:30 today — conflict with all-hands", priya_handle, False, now - timedelta(hours=7), True),
+            ("Got it", me_handle, True, now - timedelta(hours=6, minutes=50), True),
+            (
+                "Can someone review the deck before 3pm? "
+                "Client wants fewer bullets on slide 8",
+                sarah_work_handle,
+                False,
+                now - timedelta(hours=3),
+                True,
+            ),
+            ("I can take a look at 2", me_handle, True, now - timedelta(hours=2, minutes=30), True),
+            (
+                "Thanks! Can you also sanity-check the Q4 revenue slide? "
+                "Numbers feel high vs last quarter",
+                sarah_work_handle,
+                False,
+                now - timedelta(minutes=20),
+                False,
+            ),
         ],
     )
 
-    roommates_handle = insert_handle("chat-roommates")
+    jess_handle = insert_handle("Jess")
+    chris_handle = insert_handle("Chris")
     roommates_chat = insert_chat("iMessage;+;chat-roommates", "Roommates 🏠", "chat-roommates")
-    insert_messages(
+    insert_group_messages(
         roommates_chat,
-        roommates_handle,
         [
-            ("Rent is due Friday", False, now - timedelta(days=1), True),
-            ("Sent mine", True, now - timedelta(hours=18), True),
-            ("Who's taking out trash this week?", False, now - timedelta(hours=5), False),
+            ("PG&E bill is $187 this month 😬", jess_handle, False, now - timedelta(days=2), True),
+            ("Rent is due Friday — Venmo me $950", jess_handle, False, now - timedelta(days=1), True),
+            ("Sent mine", me_handle, True, now - timedelta(hours=18), True),
+            (
+                "Who's taking out trash this week? Recycling pickup is tomorrow AM",
+                chris_handle,
+                False,
+                now - timedelta(hours=5),
+                False,
+            ),
         ],
     )
 
-    book_club_handle = insert_handle("chat-book-club")
+    lisa_handle = insert_handle("Lisa Park")
+    tom_handle = insert_handle("Tom Nguyen")
     book_club_chat = insert_chat("iMessage;+;chat-book-club", "Book Club", "chat-book-club")
-    insert_messages(
+    insert_group_messages(
         book_club_chat,
-        book_club_handle,
         [
-            ("This month's pick: Project Hail Mary", False, now - timedelta(days=4), True),
-            ("Loved that one!", True, now - timedelta(days=3), True),
-            ("Discussion Sunday 4pm — who's hosting?", False, now - timedelta(hours=14), False),
+            ("This month's pick: Project Hail Mary — sci-fi but readable", lisa_handle, False, now - timedelta(days=4), True),
+            ("Loved that one! Rocky is the best", me_handle, True, now - timedelta(days=3), True),
+            ("I'm only on chapter 4 no spoilers pls", tom_handle, False, now - timedelta(days=2), True),
+            (
+                "Discussion Sunday 4pm. Who's hosting? I can bring snacks "
+                "but my apartment is chaos",
+                tom_handle,
+                False,
+                now - timedelta(hours=14),
+                False,
+            ),
         ],
     )
 
@@ -253,5 +383,18 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
     print(f"Created {db_path} with 13 conversations")
 
 
+def bootstrap_databases() -> None:
+    """Write the frozen initial snapshot and refresh the runtime working copy."""
+    base = Path(__file__).resolve().parent
+    initial = base / "initial_chat.db"
+    runtime = base / "runtime_chat.db"
+    legacy = base / "dummy_chat.db"
+
+    create_dummy_db(str(initial))
+    shutil.copy2(initial, runtime)
+    shutil.copy2(initial, legacy)
+    print(f"Bootstrapped {initial.name} and {runtime.name}")
+
+
 if __name__ == "__main__":
-    create_dummy_db()
+    bootstrap_databases()

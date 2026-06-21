@@ -15,6 +15,7 @@ frontend/dist/
 
 # Generated / local data
 connector/dummy_chat.db
+connector/runtime_chat.db
 
 # Xcode user-specific
 *.xcuserstate

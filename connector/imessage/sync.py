@@ -34,7 +34,7 @@ class MessageSyncService:
             return SyncResult(0, 0, 0, [f"chat.db not found at {self.reader.db_path}"])
 
         if not self.hydra.is_configured():
-            return SyncResult(0, 0, 0, ["HydraDB API key not configured — set HYDRA_DB_API_KEY in .env"])
+            return SyncResult(0, 0, 0, ["HydraDB API key not configured. Set HYDRA_DB_API_KEY in .env"])
 
         chats = self.reader.list_recent_chats(limit=chat_limit)
         ingested = 0

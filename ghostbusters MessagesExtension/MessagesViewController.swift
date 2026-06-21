@@ -279,7 +279,7 @@ class MessagesViewController: MSMessagesAppViewController {
         }
     }
 
-    /// Opened from Messages list / no active thread — top 3 is the entire focus.
+    /// Opened from Messages list / no active thread - top 3 is the entire focus.
     private func buildBrowseLayout(topPriorities: [PriorityOut]) {
         contentStack.addArrangedSubview(
             sectionHeader(
@@ -289,7 +289,7 @@ class MessagesViewController: MSMessagesAppViewController {
         )
 
         if topPriorities.isEmpty {
-            contentStack.addArrangedSubview(emptyState("You're all caught up — no urgent replies."))
+            contentStack.addArrangedSubview(emptyState("You're all caught up. No urgent replies."))
         } else {
             topPriorities.forEach { contentStack.addArrangedSubview(priorityCard($0, style: .hero)) }
         }
@@ -299,7 +299,7 @@ class MessagesViewController: MSMessagesAppViewController {
         ))
     }
 
-    /// Inside a chat thread — this conversation's suggestion is primary; other priorities below.
+    /// Inside a chat thread - this conversation's suggestion is primary; other priorities below.
     private func buildThreadLayout(contextPriority: PriorityOut?, topPriorities: [PriorityOut]) {
         contentStack.addArrangedSubview(
             sectionHeader(

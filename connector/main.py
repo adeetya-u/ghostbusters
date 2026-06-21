@@ -1,8 +1,10 @@
-"""Ghostbusters iMessage connector — local API bridging iMessages and HydraDB."""
+"""Ghostbusters iMessage connector - local API bridging iMessages and HydraDB."""
 
 from __future__ import annotations
 
 import os
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,15 +12,33 @@ from fastapi import FastAPI
 
 from api.routes import add_cors, router
 
-# Load .env from repo root
-_root = Path(__file__).resolve().parent.parent
-load_dotenv(_root.parent / ".env")
-load_dotenv(_root / ".env")
+# Load .env from repo root and connector directory
+_connector = Path(__file__).resolve().parent
+_repo = _connector.parent
+load_dotenv(_repo / ".env")
+load_dotenv(_connector / ".env")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from imessage.reader import ensure_runtime_db, working_reader
+    from services.priority_cache import prefetch_top_priorities
+
+    ensure_runtime_db()
+    prefetch_top_priorities(working_reader(), limit=3)
+    yield
+
 
 app = FastAPI(
     title="Ghostbusters Connector",
     description="Reads iMessages, stores context in HydraDB, serves priority queue to the UI.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 add_cors(app)
 app.include_router(router)
@@ -29,7 +49,7 @@ def root():
     return {
         "service": "ghostbusters-connector",
         "docs": "/docs",
-        "endpoints": ["/api/health", "/api/priorities", "/api/sync", "/api/chats"],
+        "endpoints": ["/api/health", "/api/priorities", "/api/prefetch", "/api/sync", "/api/chats"],
     }
 
 

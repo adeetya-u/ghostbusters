@@ -277,13 +277,90 @@ button {
 }
 
 .rec-suggestion {
+  display: block;
+  width: 100%;
   margin: 0;
   padding: 10px 12px;
   background: var(--blue-soft);
+  border: none;
   border-radius: 10px;
   font-size: 15px;
   line-height: 1.4;
   color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rec-suggestion:hover {
+  filter: brightness(0.97);
+}
+
+.composer-area {
+  border-top: 0.5px solid var(--border);
+  background: var(--bg);
+}
+
+.reply-suggestions {
+  padding: 10px 12px 0;
+}
+
+.reply-suggestions-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--blue);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.reply-suggestion-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+}
+
+.reply-suggestion-chip {
+  flex: 0 0 auto;
+  max-width: 240px;
+  border: none;
+  background: var(--blue-soft);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.composer-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px 12px;
+}
+
+.composer-input input {
+  flex: 1;
+  border: none;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 10px 14px;
+  font-size: 16px;
+}
+
+.send-button {
+  border: none;
+  background: var(--bubble-me);
+  color: #fff;
+  border-radius: 18px;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.send-button:disabled {
+  opacity: 0.45;
 }
 
 .chat-detail {
@@ -345,6 +422,15 @@ button {
   background: var(--bubble-them);
   color: var(--text);
   border-bottom-left-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.message-sender {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .message-time {

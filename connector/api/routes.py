@@ -11,12 +11,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from hydra.store import HydraMemoryStore
-from imessage.reader import IMessageReader, working_reader
+from imessage.reader import IMessageReader, ensure_runtime_db, working_reader
+from imessage.writer import reset_runtime_db, send_reply
+from services.hydra_generation import hydra_generation_configured
 from services.priorities import (
     ResponsePriority,
-    demo_priorities,
+    SuggestionGenerationError,
+    find_chat_for_suggestions,
     get_priority_for_chat,
     get_top_priorities,
+    nebius_configured,
+)
+from services.priority_cache import (
+    cache_status,
+    get_cached_top_priorities,
+    invalidate_all_priorities,
+    prefetch_top_priorities,
+)
+from services.ranker import rank_chats
+from services.suggestion_cache import cache_status as suggestion_cache_status
+from services.suggestion_cache import (
+    get_chat_suggestions,
+    invalidate_all as invalidate_all_suggestions,
+    invalidate_chat as invalidate_chat_suggestions,
+    prefetch_chat_suggestions,
 )
 
 router = APIRouter(prefix="/api")
@@ -30,6 +48,7 @@ class PriorityOut(BaseModel):
     chat_guid: str
     last_message_preview: str
     last_message_at: datetime
+    reply_waiting_at: Optional[datetime] = None
     suggested_response: str
     severity: str
     importance_score: float
@@ -40,6 +59,10 @@ class HealthOut(BaseModel):
     imessage_available: bool
     imessage_db_path: str
     hydradb_configured: bool
+    reply_generation_configured: bool
+    nebius_configured: bool
+    priorities_cache: dict[str, Any]
+    suggestions_cache: dict[str, Any]
 
 
 class SyncOut(BaseModel):
@@ -68,6 +91,25 @@ class ChatOut(BaseModel):
     last_message: str
     last_message_at: datetime
     is_from_me: bool
+    is_group: bool = False
+    needs_reply: bool = False
+    reply_waiting_at: Optional[datetime] = None
+
+
+class ChatSuggestionsOut(BaseModel):
+    chat_id: str
+    suggestions: list[str]
+    needs_reply: bool = True
+    reason: Optional[str] = None
+
+
+class SendMessageIn(BaseModel):
+    text: str
+
+
+class ResetOut(BaseModel):
+    success: bool
+    detail: str
 
 
 def _to_priority_out(p: ResponsePriority) -> PriorityOut:
@@ -79,6 +121,7 @@ def _to_priority_out(p: ResponsePriority) -> PriorityOut:
         chat_guid=p.chat_guid,
         last_message_preview=p.last_message_preview,
         last_message_at=p.last_message_at,
+        reply_waiting_at=p.reply_waiting_at,
         suggested_response=p.suggested_response,
         severity=p.severity,
         importance_score=p.importance_score,
@@ -87,13 +130,17 @@ def _to_priority_out(p: ResponsePriority) -> PriorityOut:
 
 @router.get("/health", response_model=HealthOut)
 def health() -> HealthOut:
-    reader = IMessageReader()
+    reader = working_reader()
     store = HydraMemoryStore()
     return HealthOut(
         status="ok",
         imessage_available=reader.is_available(),
         imessage_db_path=str(reader.db_path),
         hydradb_configured=store.is_configured,
+        reply_generation_configured=hydra_generation_configured(),
+        nebius_configured=nebius_configured(),
+        priorities_cache=cache_status(limit=3),
+        suggestions_cache=suggestion_cache_status(),
     )
 
 
@@ -102,35 +149,49 @@ def priorities(
     limit: int = Query(default=3, ge=1, le=10),
     chat_id: Optional[str] = Query(default=None),
     chat_guid: Optional[str] = Query(default=None),
+    refresh: bool = Query(default=False),
 ) -> list[PriorityOut]:
     reader = working_reader()
     try:
         if chat_id or chat_guid:
             if not reader.is_available():
-                demo = demo_priorities()
-                match = None
-                if chat_id:
-                    match = next((p for p in demo if p.chat_id == chat_id), None)
-                if not match and chat_guid:
-                    match = next((p for p in demo if p.chat_guid == chat_guid), None)
-                return [_to_priority_out(match)] if match else []
+                raise HTTPException(status_code=503, detail="iMessage database unavailable.")
 
             item = get_priority_for_chat(reader, chat_id=chat_id, chat_guid=chat_guid)
             return [_to_priority_out(item)] if item else []
 
         if not reader.is_available():
-            return [_to_priority_out(p) for p in demo_priorities()[:limit]]
-        items = get_top_priorities(reader, limit=limit)
-        if not items:
-            return [_to_priority_out(p) for p in demo_priorities()[:limit]]
+            raise HTTPException(status_code=503, detail="iMessage database unavailable.")
+
+        items, _from_cache = get_cached_top_priorities(reader, limit=limit, refresh=refresh)
         return [_to_priority_out(p) for p in items]
     except PermissionError:
         raise HTTPException(
             status_code=403,
-            detail="Full Disk Access required. Grant it in System Settings → Privacy & Security → Full Disk Access.",
+            detail="Full Disk Access required. Grant it in System Settings > Privacy & Security > Full Disk Access.",
         )
-    except (FileNotFoundError, sqlite3.OperationalError):
-        return [_to_priority_out(p) for p in demo_priorities()[:limit]]
+    except SuggestionGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/prefetch")
+def prefetch_priorities(limit: int = Query(default=3, ge=1, le=10)) -> dict[str, Any]:
+    """Warm priority cache (includes Nebius replies for top chats and their composer blurbs)."""
+    reader = working_reader()
+    prefetch_top_priorities(reader, limit=limit)
+
+    ranked = rank_chats(reader.list_recent_chats(limit=30), reader=reader)
+    top_ids = {item.chat.chat_id for item in ranked[:limit]}
+    extra = [item.chat for item in ranked if item.chat.chat_id not in top_ids][: max(0, limit * 2)]
+    prefetch_chat_suggestions(reader, extra, count=3)
+
+    return {
+        "status": "prefetch_started",
+        "cache": cache_status(limit=limit),
+        "suggestions_cache": suggestion_cache_status(),
+    }
 
 
 @router.post("/sync", response_model=SyncOut)
@@ -156,6 +217,19 @@ def sync_messages(limit: int = 50) -> SyncOut:
         return SyncOut(success=False, detail=f"Sync failed: {exc}")
 
 
+@router.get("/hydra/logs")
+def hydra_logs(limit: int = Query(default=20, ge=1, le=50)) -> dict[str, Any]:
+    from hydra.activity_log import recent_hydra_logs
+
+    logs = recent_hydra_logs(limit=limit)
+    store = HydraMemoryStore()
+    return {
+        "configured": store.is_configured,
+        "count": len(logs),
+        "logs": logs,
+    }
+
+
 @router.get("/chats", response_model=list[ChatOut])
 def list_chats(limit: int = 20) -> list[ChatOut]:
     reader = working_reader()
@@ -170,23 +244,40 @@ def list_chats(limit: int = 20) -> list[ChatOut]:
                 last_message=c.last_message,
                 last_message_at=c.last_message_at,
                 is_from_me=c.is_from_me,
+                is_group=c.is_group,
+                needs_reply=c.needs_reply,
+                reply_waiting_at=c.reply_waiting_at,
             )
             for c in chats
         ]
-    except (FileNotFoundError, PermissionError, sqlite3.OperationalError):
-        demo = demo_priorities()
-        return [
-            ChatOut(
-                chat_id=p.chat_id,
-                chat_guid=p.chat_guid,
-                display_name=p.contact_name,
-                contact_handle=p.contact_handle,
-                last_message=p.last_message_preview,
-                last_message_at=p.last_message_at,
-                is_from_me=False,
+    except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/chats/{chat_id}/suggestions", response_model=ChatSuggestionsOut)
+def chat_suggestions(
+    chat_id: str,
+    limit: int = Query(default=3, ge=1, le=5),
+    refresh: bool = Query(default=False),
+) -> ChatSuggestionsOut:
+    reader = working_reader()
+    try:
+        chat = find_chat_for_suggestions(reader, chat_id=chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found")
+        if not chat.needs_reply or not chat.reply_to_message.strip():
+            return ChatSuggestionsOut(
+                chat_id=chat_id,
+                suggestions=[],
+                needs_reply=False,
+                reason="caught_up",
             )
-            for p in demo[:limit]
-        ]
+        suggestions = get_chat_suggestions(reader, chat, count=limit, refresh=refresh)
+        return ChatSuggestionsOut(chat_id=chat_id, suggestions=suggestions, needs_reply=True)
+    except SuggestionGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.get("/chats/{chat_id}/messages", response_model=list[MessageOut])
@@ -210,6 +301,52 @@ def chat_messages(chat_id: str, limit: int = 50) -> list[MessageOut]:
         ]
     except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/chats/{chat_id}/messages", response_model=MessageOut)
+def send_chat_message(chat_id: str, body: SendMessageIn) -> MessageOut:
+    try:
+        message = send_reply(chat_id, body.text)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    invalidate_chat_suggestions(chat_id)
+    invalidate_all_priorities()
+    invalidate_all_suggestions()
+
+    reader = working_reader()
+    prefetch_top_priorities(reader, limit=3)
+
+    return MessageOut(
+        row_id=message.row_id,
+        chat_id=message.chat_id,
+        chat_guid=message.chat_guid,
+        contact_handle=message.contact_handle,
+        contact_name=message.contact_name,
+        text=message.text,
+        is_from_me=message.is_from_me,
+        timestamp=message.timestamp,
+        is_read=message.is_read,
+    )
+
+
+@router.post("/reset", response_model=ResetOut)
+def reset_database() -> ResetOut:
+    """Restore the runtime DB from the frozen initial unreplied snapshot."""
+    try:
+        reset_runtime_db()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    invalidate_all_priorities()
+    invalidate_all_suggestions()
+    reader = working_reader()
+    prefetch_top_priorities(reader, limit=3)
+    return ResetOut(success=True, detail="Runtime database restored from initial snapshot.")
 
 
 def add_cors(app) -> None:

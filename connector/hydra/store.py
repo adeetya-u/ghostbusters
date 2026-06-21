@@ -7,6 +7,7 @@ import os
 from typing import Any, Optional
 
 from imessage.reader import ChatSummary, IMessage, IMessageReader
+from hydra.activity_log import record_hydra_log
 
 
 class HydraMemoryStore:
@@ -71,11 +72,23 @@ class HydraMemoryStore:
             }
         ]
 
+        record_hydra_log(
+            "ingest_start",
+            chat_id=chat.chat_id,
+            contact=chat.display_name,
+            messages=len(messages),
+        )
         result = self.client.context.ingest(
             type="memory",
             tenant_id=self.tenant_id,
             sub_tenant_id=self.sub_tenant_id,
             memories=json.dumps(memory_payload),
+        )
+        record_hydra_log(
+            "ingest_ok",
+            chat_id=chat.chat_id,
+            contact=chat.display_name,
+            messages=len(messages),
         )
         return {"ingested": len(messages), "chat_id": chat.chat_id, "result": result}
 
@@ -108,12 +121,48 @@ class HydraMemoryStore:
 
         return {"ingested_chats": len(results), "results": results}
 
-    def query_context(self, query: str, max_results: int = 8) -> Any:
+    def query_context(
+        self,
+        query: str,
+        max_results: int = 8,
+        *,
+        chat_id: str | None = None,
+        mode: str = "thinking",
+        graph_context: bool = True,
+    ) -> Any:
+        record_hydra_log(
+            "store_query",
+            query=query[:160],
+            max_results=max_results,
+            chat_id=chat_id,
+            mode=mode,
+        )
+        metadata_filters = {"chat_id": chat_id} if chat_id else None
         return self.client.query(
             tenant_id=self.tenant_id,
             sub_tenant_id=self.sub_tenant_id,
             query=query,
             type="memory",
             query_by="hybrid",
+            mode=mode,
+            graph_context=graph_context,
             max_results=max_results,
+            metadata_filters=metadata_filters,
+        )
+
+    def query_reply_context(
+        self,
+        query: str,
+        *,
+        chat_id: str | None = None,
+        max_results: int = 8,
+    ) -> Any:
+        """Thinking-mode graph query tuned for reply generation."""
+        self.ensure_tenant()
+        return self.query_context(
+            query,
+            max_results=max_results,
+            chat_id=chat_id,
+            mode="thinking",
+            graph_context=True,
         )

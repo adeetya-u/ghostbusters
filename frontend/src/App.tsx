@@ -4,7 +4,10 @@ import {
   fetchChats,
   fetchMessages,
   fetchPriorities,
+  fetchReplySuggestions,
+  sendMessage,
   formatTime,
+  chatInboxTimestamp,
   initials,
   severityLabel,
 } from "./api";
@@ -18,7 +21,7 @@ function GhostbustersRecommendations({
 }: {
   priorities: Priority[];
   loading: boolean;
-  onSelect: (chatId: string) => void;
+  onSelect: (chatId: string, suggestedResponse: string) => void;
 }) {
   return (
     <section className="recommendations-section">
@@ -35,16 +38,11 @@ function GhostbustersRecommendations({
       {loading ? (
         <p className="loading">Loading recommendations…</p>
       ) : priorities.length === 0 ? (
-        <p className="empty-rec">You're all caught up — no urgent replies.</p>
+        <p className="empty-rec">You're all caught up. No urgent replies.</p>
       ) : (
         <div className="recommendation-cards">
           {priorities.map((p) => (
-            <button
-              key={p.chat_id}
-              type="button"
-              className="recommendation-card"
-              onClick={() => onSelect(p.chat_id)}
-            >
+            <article key={p.chat_id} className="recommendation-card">
               <div className="rec-card-top">
                 <span className="rec-rank">#{p.rank}</span>
                 <span className={`rec-severity ${p.severity}`}>
@@ -53,8 +51,14 @@ function GhostbustersRecommendations({
               </div>
               <p className="rec-contact">{p.contact_name}</p>
               <p className="rec-preview">"{p.last_message_preview}"</p>
-              <p className="rec-suggestion">{p.suggested_response}</p>
-            </button>
+              <button
+                type="button"
+                className="rec-suggestion"
+                onClick={() => onSelect(p.chat_id, p.suggested_response)}
+              >
+                {p.suggested_response}
+              </button>
+            </article>
           ))}
         </div>
       )}
@@ -73,7 +77,7 @@ function MessageListScreen({
   priorities: Priority[];
   loadingChats: boolean;
   loadingPriorities: boolean;
-  onOpenChat: (chat: Chat) => void;
+  onOpenChat: (chat: Chat, prefilledDraft?: string) => void;
 }) {
   return (
     <>
@@ -99,7 +103,7 @@ function MessageListScreen({
                     <div className="chat-row-top">
                       <span className="chat-row-name">{chat.display_name}</span>
                       <span className="chat-row-time">
-                        {formatTime(chat.last_message_at)}
+                        {chatInboxTimestamp(chat)}
                       </span>
                     </div>
                     <p
@@ -122,9 +126,9 @@ function MessageListScreen({
       <GhostbustersRecommendations
         priorities={priorities}
         loading={loadingPriorities}
-        onSelect={(chatId) => {
+        onSelect={(chatId, suggestedResponse) => {
           const chat = chats.find((c) => c.chat_id === chatId);
-          if (chat) onOpenChat(chat);
+          if (chat) onOpenChat(chat, suggestedResponse);
         }}
       />
     </>
@@ -134,17 +138,27 @@ function MessageListScreen({
 function ChatDetailScreen({
   chat,
   messages,
-  recommendation,
+  suggestions,
+  draft,
   loadingMessages,
-  loadingRec,
+  loadingSuggestions,
   onBack,
+  onSelectSuggestion,
+  onDraftChange,
+  onSend,
+  sending,
 }: {
   chat: Chat;
   messages: Message[];
-  recommendation: Priority | null;
+  suggestions: string[];
+  draft: string;
   loadingMessages: boolean;
-  loadingRec: boolean;
+  loadingSuggestions: boolean;
   onBack: () => void;
+  onSelectSuggestion: (text: string) => void;
+  onDraftChange: (text: string) => void;
+  onSend: () => void;
+  sending: boolean;
 }) {
   return (
     <div className="chat-detail">
@@ -155,15 +169,6 @@ function ChatDetailScreen({
         <div className="chat-header-title">{chat.display_name}</div>
       </header>
 
-      {loadingRec ? (
-        <p className="loading">Generating suggestion…</p>
-      ) : recommendation ? (
-        <div className="chat-context-rec">
-          <h3>Ghostbusters suggestion</h3>
-          <p>{recommendation.suggested_response}</p>
-        </div>
-      ) : null}
-
       {loadingMessages ? (
         <p className="loading">Loading messages…</p>
       ) : (
@@ -173,11 +178,55 @@ function ChatDetailScreen({
               key={msg.row_id}
               className={`message-bubble ${msg.is_from_me ? "from-me" : "from-them"}`}
             >
+              {chat.is_group && !msg.is_from_me && msg.contact_name ? (
+                <span className="message-sender">{msg.contact_name}</span>
+              ) : null}
               {msg.text}
             </div>
           ))}
         </div>
       )}
+
+      <div className="composer-area">
+        <div className="reply-suggestions">
+          <p className="reply-suggestions-label">Ghostbusters</p>
+          {loadingSuggestions ? (
+            <p className="loading">Generating suggestions…</p>
+          ) : (
+            <div className="reply-suggestion-row">
+              {suggestions.map((text) => (
+                <button
+                  key={text}
+                  type="button"
+                  className="reply-suggestion-chip"
+                  onClick={() => onSelectSuggestion(text)}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="composer-input">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            placeholder="iMessage"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && draft.trim()) onSend();
+            }}
+          />
+          <button
+            type="button"
+            className="send-button"
+            disabled={!draft.trim() || sending}
+            onClick={onSend}
+          >
+            {sending ? "…" : "Send"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -187,11 +236,13 @@ export default function App() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [priorities, setPriorities] = useState<Priority[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [chatRecommendation, setChatRecommendation] = useState<Priority | null>(null);
+  const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
+  const [draft, setDraft] = useState("");
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingPriorities, setLoadingPriorities] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [loadingRec, setLoadingRec] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadListData = useCallback(async () => {
@@ -217,31 +268,57 @@ export default function App() {
     loadListData();
   }, [loadListData]);
 
-  const openChat = async (chat: Chat) => {
+  const openChat = async (chat: Chat, prefilledDraft = "") => {
     setView({ kind: "chat", chat });
     setMessages([]);
-    setChatRecommendation(null);
+    setChatSuggestions([]);
+    setDraft(prefilledDraft);
     setLoadingMessages(true);
-    setLoadingRec(true);
+    setLoadingSuggestions(true);
 
     try {
-      const [msgData, recData] = await Promise.all([
+      const [msgData, suggestionData] = await Promise.all([
         fetchMessages(chat.chat_id),
-        fetchPriorities(1, chat.chat_id),
+        fetchReplySuggestions(chat.chat_id, 3),
       ]);
       setMessages(msgData);
-      setChatRecommendation(recData[0] ?? null);
+      setChatSuggestions(suggestionData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load chat");
     } finally {
       setLoadingMessages(false);
-      setLoadingRec(false);
+      setLoadingSuggestions(false);
     }
   };
 
   const goBack = () => {
     setView({ kind: "list" });
     setError(null);
+    loadListData();
+  };
+
+  const sendDraft = async () => {
+    if (view.kind !== "chat" || !draft.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await sendMessage(view.chat.chat_id, draft.trim());
+      setDraft("");
+      setChatSuggestions([]);
+      setLoadingSuggestions(true);
+      const [msgData, suggestionData] = await Promise.all([
+        fetchMessages(view.chat.chat_id),
+        fetchReplySuggestions(view.chat.chat_id, 3).catch(() => [] as string[]),
+      ]);
+      setMessages(msgData);
+      setChatSuggestions(suggestionData);
+      await loadListData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send message");
+    } finally {
+      setSending(false);
+      setLoadingSuggestions(false);
+    }
   };
 
   return (
@@ -260,10 +337,15 @@ export default function App() {
         <ChatDetailScreen
           chat={view.chat}
           messages={messages}
-          recommendation={chatRecommendation}
+          suggestions={chatSuggestions}
+          draft={draft}
           loadingMessages={loadingMessages}
-          loadingRec={loadingRec}
+          loadingSuggestions={loadingSuggestions}
           onBack={goBack}
+          onSelectSuggestion={setDraft}
+          onDraftChange={setDraft}
+          onSend={sendDraft}
+          sending={sending}
         />
       )}
     </div>

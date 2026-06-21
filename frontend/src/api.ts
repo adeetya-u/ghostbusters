@@ -6,6 +6,7 @@ export interface Priority {
   chat_guid: string;
   last_message_preview: string;
   last_message_at: string;
+  reply_waiting_at?: string | null;
   suggested_response: string;
   severity: "low" | "medium" | "high" | "critical";
   importance_score: number;
@@ -19,6 +20,9 @@ export interface Chat {
   last_message: string;
   last_message_at: string;
   is_from_me: boolean;
+  is_group?: boolean;
+  needs_reply?: boolean;
+  reply_waiting_at?: string | null;
 }
 
 export interface Message {
@@ -68,6 +72,29 @@ export async function fetchHealth(): Promise<HealthStatus> {
   return res.json();
 }
 
+export async function fetchReplySuggestions(chatId: string, limit = 3): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/chats/${chatId}/suggestions?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to load suggestions (${res.status})`);
+  const data: { suggestions: string[] } = await res.json();
+  return data.suggestions;
+}
+
+export async function sendMessage(chatId: string, text: string): Promise<Message> {
+  const res = await fetch(`${API_BASE}/api/chats/${chatId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`Failed to send message (${res.status})`);
+  return res.json();
+}
+
+export async function resetDatabase(): Promise<{ success: boolean; detail: string }> {
+  const res = await fetch(`${API_BASE}/api/reset`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to reset database (${res.status})`);
+  return res.json();
+}
+
 export async function syncMessages(): Promise<{ success: boolean; detail: string }> {
   const res = await fetch(`${API_BASE}/api/sync`, { method: "POST" });
   return res.json();
@@ -78,6 +105,25 @@ export function initials(name: string): string {
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   if (parts.length === 1 && parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
   return name.slice(0, 2).toUpperCase() || "?";
+}
+
+export function formatReplyWait(iso: string): string {
+  const date = new Date(iso);
+  const seconds = Math.max(0, (Date.now() - date.getTime()) / 1000);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes <= 1 ? "now" : `${minutes}m`;
+  const hours = Math.floor(seconds / 3600);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(seconds / 86400);
+  if (days < 7) return `${days}d`;
+  return `${Math.floor(days / 7)}w`;
+}
+
+export function chatInboxTimestamp(chat: Chat): string {
+  if (chat.needs_reply && chat.reply_waiting_at) {
+    return formatReplyWait(chat.reply_waiting_at);
+  }
+  return formatTime(chat.last_message_at);
 }
 
 export function formatTime(iso: string): string {

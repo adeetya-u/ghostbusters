@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,24 @@ class ChatSummary:
     last_message_at: datetime
     is_from_me: bool
     unread_count: int
+    is_group: bool = False
+    needs_reply: bool = False
+    reply_to_message: str = ""
+    reply_to_sender: Optional[str] = None
+    reply_waiting_at: Optional[datetime] = None
+
+
+def is_group_chat(chat_guid: str) -> bool:
+    """Group threads use iMessage;+; in the chat GUID."""
+    return ";+;" in (chat_guid or "")
+
+
+def format_sender_name(handle_id: str | None) -> str:
+    if not handle_id:
+        return "Someone"
+    if handle_id.startswith("+") and handle_id[1:].isdigit():
+        return handle_id
+    return handle_id
 
 
 def default_db_path() -> Path:
@@ -49,15 +68,60 @@ def dummy_db_path() -> Path:
     return Path(__file__).resolve().parent.parent / "dummy_chat.db"
 
 
-def working_reader() -> IMessageReader:
-    """Return a reader that can actually query, falling back to dummy_chat.db."""
-    primary = IMessageReader()
-    candidates = [primary.db_path]
-    dummy = dummy_db_path()
-    if dummy not in candidates:
-        candidates.append(dummy)
+def initial_db_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "initial_chat.db"
 
-    for path in candidates:
+
+def runtime_db_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "runtime_chat.db"
+
+
+def ensure_runtime_db() -> Path:
+    """Copy the frozen initial snapshot into the writable runtime DB if needed."""
+    runtime = runtime_db_path()
+    if runtime.exists():
+        return runtime
+
+    initial = initial_db_path()
+    if initial.exists():
+        shutil.copy2(initial, runtime)
+        return runtime
+
+    legacy = dummy_db_path()
+    if legacy.exists():
+        shutil.copy2(legacy, runtime)
+        return runtime
+
+    raise FileNotFoundError(
+        "No chat database found. Run: python create_dummy_db.py"
+    )
+
+
+def working_db_path() -> Path:
+    """Resolve the writable DB used for reads and sends in local dev."""
+    override = os.environ.get("IMESSAGE_DB_PATH")
+    if override:
+        path = Path(override).expanduser()
+        if path.name in {"dummy_chat.db", "initial_chat.db"}:
+            return ensure_runtime_db()
+        return path
+    return ensure_runtime_db()
+
+
+def working_reader() -> IMessageReader:
+    """Return a reader backed by the writable runtime DB in dev, else real chat.db."""
+    override = os.environ.get("IMESSAGE_DB_PATH")
+    if override:
+        path = Path(override).expanduser()
+        if path.name in {"dummy_chat.db", "initial_chat.db"}:
+            return IMessageReader(ensure_runtime_db())
+        return IMessageReader(path)
+
+    runtime = runtime_db_path()
+    initial = initial_db_path()
+    legacy = dummy_db_path()
+
+    for path in (runtime, initial, legacy):
         reader = IMessageReader(path)
         if not reader.is_available():
             continue
@@ -67,7 +131,11 @@ def working_reader() -> IMessageReader:
             return reader
         except sqlite3.OperationalError:
             continue
-    return primary
+
+    primary = IMessageReader()
+    if primary.is_available():
+        return primary
+    return IMessageReader(ensure_runtime_db())
 
 
 def _apple_ts_to_datetime(raw: int | None) -> datetime:
@@ -112,6 +180,58 @@ def _extract_text(row: sqlite3.Row) -> str:
     if text.strip():
         return text.strip()
     return _decode_attributed_body(row["attributedBody"])
+
+
+def _inbound_waiting_at(messages: list[IMessage], *, is_group: bool) -> Optional[datetime]:
+    """When the current unanswered inbound message arrived."""
+    if not messages:
+        return None
+
+    last_outbound_at: datetime | None = None
+    for message in reversed(messages):
+        if message.is_from_me:
+            last_outbound_at = message.timestamp
+            break
+
+    if is_group:
+        for message in reversed(messages):
+            if message.is_from_me:
+                continue
+            if last_outbound_at is None or message.timestamp > last_outbound_at:
+                return message.timestamp
+        return None
+
+    last = messages[-1]
+    if last.is_from_me:
+        return None
+    return last.timestamp
+
+
+def _reply_context(messages: list[IMessage], *, is_group: bool) -> tuple[bool, str, Optional[str]]:
+    """Return whether the thread needs a reply and the inbound message to respond to."""
+    if not messages:
+        return False, "", None
+
+    last_outbound_at: datetime | None = None
+    for message in reversed(messages):
+        if message.is_from_me:
+            last_outbound_at = message.timestamp
+            break
+
+    if is_group:
+        for message in reversed(messages):
+            if message.is_from_me:
+                continue
+            if last_outbound_at is None or message.timestamp > last_outbound_at:
+                sender = format_sender_name(message.contact_handle or message.contact_name)
+                return True, message.text, sender
+        return False, "", None
+
+    last = messages[-1]
+    if last.is_from_me:
+        return False, "", None
+    sender = format_sender_name(last.contact_handle or last.contact_name)
+    return True, last.text, sender
 
 
 class IMessageReader:
@@ -164,17 +284,33 @@ class IMessageReader:
         chats: list[ChatSummary] = []
         for row in rows:
             body = _extract_text(row)
+            chat_guid = row["chat_guid"] or ""
             display = row["display_name"] or row["handle_id"] or row["chat_identifier"] or "Unknown"
+            chat_id = str(row["chat_id"])
+            group = is_group_chat(chat_guid)
+            is_from_me = bool(row["is_from_me"])
+            if is_from_me and not group:
+                contact_handle = row["chat_identifier"] or row["display_name"] or ""
+            else:
+                contact_handle = row["handle_id"] or row["chat_identifier"] or ""
+            messages = self.get_messages_for_chat(chat_id, limit=40)
+            needs_reply, reply_message, reply_sender = _reply_context(messages, is_group=group)
+            waiting_at = _inbound_waiting_at(messages, is_group=group) if needs_reply else None
             chats.append(
                 ChatSummary(
-                    chat_id=str(row["chat_id"]),
-                    chat_guid=row["chat_guid"] or "",
+                    chat_id=chat_id,
+                    chat_guid=chat_guid,
                     display_name=display,
-                    contact_handle=row["handle_id"] or row["chat_identifier"] or "",
+                    contact_handle=contact_handle,
                     last_message=body,
                     last_message_at=_apple_ts_to_datetime(row["date"]),
-                    is_from_me=bool(row["is_from_me"]),
+                    is_from_me=is_from_me,
                     unread_count=0 if row["is_from_me"] or row["is_read"] else 1,
+                    is_group=group,
+                    needs_reply=needs_reply,
+                    reply_to_message=reply_message,
+                    reply_to_sender=reply_sender,
+                    reply_waiting_at=waiting_at,
                 )
             )
         return chats
@@ -208,14 +344,22 @@ class IMessageReader:
             body = _extract_text(row)
             if not body:
                 continue
-            display = row["display_name"] or row["handle_id"] or "Unknown"
+            chat_guid = row["chat_guid"] or ""
+            group = is_group_chat(chat_guid)
+            handle_id = row["handle_id"] or ""
+            if row["is_from_me"]:
+                contact_name = None
+            elif group:
+                contact_name = format_sender_name(handle_id)
+            else:
+                contact_name = row["display_name"] or format_sender_name(handle_id)
             messages.append(
                 IMessage(
                     row_id=row["message_id"],
                     chat_id=str(row["chat_id"]),
-                    chat_guid=row["chat_guid"] or "",
-                    contact_handle=row["handle_id"] or "",
-                    contact_name=display if not row["is_from_me"] else None,
+                    chat_guid=chat_guid,
+                    contact_handle=handle_id,
+                    contact_name=contact_name,
                     text=body,
                     is_from_me=bool(row["is_from_me"]),
                     timestamp=_apple_ts_to_datetime(row["date"]),
