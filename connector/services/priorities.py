@@ -1,8 +1,8 @@
 """
-Priority ranking and HydraDB-backed reply suggestions.
+Priority ranking and reply suggestions.
 
-Ranking uses services/ranker.py. Reply text is generated only via HydraDB context
-retrieval (thinking + graph) followed by LLM synthesis from that context.
+Top-3 Ghostbusters priorities always use HydraDB (per-chat window) + Nebius.
+In-thread follow-up suggestions use Nebius with the last 4 messages only.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from datetime import datetime
 from imessage.reader import ChatSummary, IMessageReader
 from services.hydra_generation import (
     HydraGenerationError,
-    generate_chat_reply_suggestions,
+    ReplySuggestionResult,
+    generate_chat_reply_suggestions_with_context,
+    generate_followup_suggestions_with_context,
     hydra_generation_configured,
 )
 from services.ranker import rank_chats
@@ -26,8 +28,29 @@ class SuggestionGenerationError(Exception):
 
 def generate_chat_reply_suggestions_for_chat(chat: ChatSummary, count: int = 3) -> list[str]:
     """Public wrapper mapping HydraDB generation errors to API errors."""
+    return generate_chat_reply_suggestions_with_context_for_chat(chat, count=count).suggestions
+
+
+def generate_chat_reply_suggestions_with_context_for_chat(
+    chat: ChatSummary,
+    count: int = 3,
+) -> ReplySuggestionResult:
+    """Initial/priority suggestions: full HydraDB context window + Nebius."""
     try:
-        return generate_chat_reply_suggestions(chat, count=count)
+        return generate_chat_reply_suggestions_with_context(chat, count=count)
+    except HydraGenerationError as exc:
+        raise SuggestionGenerationError(str(exc)) from exc
+
+
+def generate_followup_suggestions_for_chat(
+    reader: IMessageReader,
+    chat: ChatSummary,
+    count: int = 3,
+) -> ReplySuggestionResult:
+    """Follow-up suggestions: Nebius only with the last 4 thread messages."""
+    try:
+        messages = reader.get_messages_for_chat(chat.chat_id, limit=50)
+        return generate_followup_suggestions_with_context(chat, messages, count=count)
     except HydraGenerationError as exc:
         raise SuggestionGenerationError(str(exc)) from exc
 
@@ -112,7 +135,7 @@ def _chat_to_priority(
         last_message_preview=preview,
         last_message_at=chat.last_message_at,
         reply_waiting_at=chat.reply_waiting_at,
-        suggested_response=suggestions[0],
+        suggested_response=suggestions.suggestions[0] if suggestions.suggestions else "Generating reply…",
         severity=severity,
         importance_score=importance_score,
     )

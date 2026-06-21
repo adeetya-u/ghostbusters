@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from imessage.reader import (
     APPLE_EPOCH,
     IMessage,
-    IMessageReader,
-    format_sender_name,
-    is_group_chat,
     working_db_path,
+)
+
+DAD_DEMO_DISPLAY_NAME = "Dad"
+DAD_DEMO_FOLLOW_UP_TEXT = (
+    "Good. Save the smog certificate number, DMV sometimes asks for it later. "
+    "Mom still wants a living room photo before we visit next month"
 )
 
 
@@ -27,6 +30,83 @@ def _me_handle_id(conn: sqlite3.Connection) -> int:
         return int(row[0])
     conn.execute("INSERT INTO handle (id) VALUES (?)", ("Me",))
     return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def _contact_handle_id(conn: sqlite3.Connection, chat_id: str) -> int | None:
+    row = conn.execute(
+        """
+        SELECT m.handle_id
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE cmj.chat_id = ? AND m.is_from_me = 0 AND m.handle_id IS NOT NULL
+        ORDER BY m.date DESC, m.ROWID DESC
+        LIMIT 1
+        """,
+        (chat_id,),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+def _insert_inbound_message(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: str,
+    handle_id: int,
+    text: str,
+    timestamp: datetime,
+) -> int:
+    conn.execute(
+        """
+        INSERT INTO message (text, is_from_me, is_read, date, handle_id)
+        VALUES (?, 0, 0, ?, ?)
+        """,
+        (text, _apple_ts(timestamp), handle_id),
+    )
+    message_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+        (chat_id, message_id),
+    )
+    return message_id
+
+
+def _dad_follow_up_already_sent(conn: sqlite3.Connection, chat_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        WHERE cmj.chat_id = ? AND m.is_from_me = 0 AND m.text = ?
+        LIMIT 1
+        """,
+        (chat_id, DAD_DEMO_FOLLOW_UP_TEXT),
+    ).fetchone()
+    return row is not None
+
+
+def _maybe_insert_dad_demo_follow_up(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: str,
+    display_name: str | None,
+    sent_at: datetime,
+) -> None:
+    if (display_name or "").strip() != DAD_DEMO_DISPLAY_NAME:
+        return
+    if _dad_follow_up_already_sent(conn, chat_id):
+        return
+
+    contact_handle = _contact_handle_id(conn, chat_id)
+    if not contact_handle:
+        return
+
+    _insert_inbound_message(
+        conn,
+        chat_id=chat_id,
+        handle_id=contact_handle,
+        text=DAD_DEMO_FOLLOW_UP_TEXT,
+        timestamp=sent_at + timedelta(seconds=2),
+    )
 
 
 def send_reply(chat_id: str, text: str) -> IMessage:
@@ -72,15 +152,15 @@ def send_reply(chat_id: str, text: str) -> IMessage:
             """,
             (chat_id,),
         )
+        _maybe_insert_dad_demo_follow_up(
+            conn,
+            chat_id=str(chat_id),
+            display_name=chat["display_name"],
+            sent_at=now,
+        )
         conn.commit()
 
-    reader = IMessageReader(db_path)
-    messages = reader.get_messages_for_chat(chat_id, limit=1)
-    if messages:
-        return messages[-1]
-
     chat_guid = chat["guid"] or ""
-    group = is_group_chat(chat_guid)
     return IMessage(
         row_id=message_id,
         chat_id=str(chat_id),

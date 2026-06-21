@@ -11,8 +11,11 @@ struct ChatSummary: Codable, Identifiable, Hashable {
     let is_group: Bool
     let needs_reply: Bool
     let reply_waiting_at: String?
+    let unread_count: Int
 
     var id: String { chat_id }
+
+    var hasUnread: Bool { unread_count > 0 }
 
     init(
         chat_id: String,
@@ -24,7 +27,8 @@ struct ChatSummary: Codable, Identifiable, Hashable {
         is_from_me: Bool,
         is_group: Bool = false,
         needs_reply: Bool = false,
-        reply_waiting_at: String? = nil
+        reply_waiting_at: String? = nil,
+        unread_count: Int = 0
     ) {
         self.chat_id = chat_id
         self.chat_guid = chat_guid
@@ -36,6 +40,7 @@ struct ChatSummary: Codable, Identifiable, Hashable {
         self.is_group = is_group
         self.needs_reply = needs_reply
         self.reply_waiting_at = reply_waiting_at
+        self.unread_count = unread_count
     }
 
     init(from decoder: Decoder) throws {
@@ -50,6 +55,7 @@ struct ChatSummary: Codable, Identifiable, Hashable {
         is_group = try container.decodeIfPresent(Bool.self, forKey: .is_group) ?? false
         needs_reply = try container.decodeIfPresent(Bool.self, forKey: .needs_reply) ?? false
         reply_waiting_at = try container.decodeIfPresent(String.self, forKey: .reply_waiting_at)
+        unread_count = try container.decodeIfPresent(Int.self, forKey: .unread_count) ?? 0
     }
 }
 
@@ -109,7 +115,7 @@ struct PriorityItem: Codable, Identifiable {
         reply_waiting_at = try container.decodeIfPresent(String.self, forKey: .reply_waiting_at)
         suggested_response = try container.decode(String.self, forKey: .suggested_response)
         severity = try container.decode(String.self, forKey: .severity)
-        importance_score = try container.decodeDouble(forKey: .importance_score)
+        importance_score = try container.decode(Double.self, forKey: .importance_score)
     }
 }
 

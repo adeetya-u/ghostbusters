@@ -333,7 +333,7 @@ class IMessageReader:
         JOIN chat c ON c.ROWID = cmj.chat_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         WHERE c.ROWID = ?
-        ORDER BY m.date DESC
+        ORDER BY m.date DESC, m.ROWID DESC
         LIMIT ?
         """
         with self._connect() as conn:
@@ -386,7 +386,7 @@ class IMessageReader:
         JOIN chat c ON c.ROWID = cmj.chat_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         WHERE m.is_from_me = 0
-        ORDER BY m.date DESC
+        ORDER BY m.date DESC, m.ROWID DESC
         LIMIT ?
         """
         with self._connect() as conn:

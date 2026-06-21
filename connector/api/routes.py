@@ -94,6 +94,7 @@ class ChatOut(BaseModel):
     is_group: bool = False
     needs_reply: bool = False
     reply_waiting_at: Optional[datetime] = None
+    unread_count: int = 0
 
 
 class ChatSuggestionsOut(BaseModel):
@@ -101,6 +102,19 @@ class ChatSuggestionsOut(BaseModel):
     suggestions: list[str]
     needs_reply: bool = True
     reason: Optional[str] = None
+    context_snippets: list[str] = []
+    hydra_chunk_count: int = 0
+    context_chat_id: Optional[str] = None
+    context_scoped_to_chat: bool = True
+    context_sub_tenant_id: Optional[str] = None
+    generation_source: str = "hydradb"
+
+
+class ChatContextOut(BaseModel):
+    chat_id: str
+    context_snippets: list[str] = []
+    hydra_chunk_count: int = 0
+    context_sub_tenant_id: Optional[str] = None
 
 
 class SendMessageIn(BaseModel):
@@ -178,17 +192,18 @@ def priorities(
 
 @router.post("/prefetch")
 def prefetch_priorities(limit: int = Query(default=3, ge=1, le=10)) -> dict[str, Any]:
-    """Warm priority cache (includes Nebius replies for top chats and their composer blurbs)."""
+    """Warm priority cache for top N and Hydra suggestions for every waiting chat."""
     reader = working_reader()
     prefetch_top_priorities(reader, limit=limit)
 
     ranked = rank_chats(reader.list_recent_chats(limit=30), reader=reader)
-    top_ids = {item.chat.chat_id for item in ranked[:limit]}
-    extra = [item.chat for item in ranked if item.chat.chat_id not in top_ids][: max(0, limit * 2)]
-    prefetch_chat_suggestions(reader, extra, count=3)
+    all_waiting = [item.chat for item in ranked]
+    prefetch_chat_suggestions(reader, all_waiting, count=3)
 
     return {
         "status": "prefetch_started",
+        "priorities_limit": limit,
+        "suggestions_prefetch_count": len(all_waiting),
         "cache": cache_status(limit=limit),
         "suggestions_cache": suggestion_cache_status(),
     }
@@ -210,7 +225,11 @@ def sync_messages(limit: int = 50) -> SyncOut:
             raise FileNotFoundError(str(reader.db_path))
         store.ensure_tenant()
         result = store.ingest_recent_inbound(reader, limit=limit)
-        return SyncOut(success=True, detail="Messages synced to HydraDB", result=result)
+        return SyncOut(
+            success=True,
+            detail="Each chat synced to its own HydraDB context window",
+            result=result,
+        )
     except FileNotFoundError as exc:
         return SyncOut(success=False, detail=str(exc))
     except Exception as exc:
@@ -247,9 +266,33 @@ def list_chats(limit: int = 20) -> list[ChatOut]:
                 is_group=c.is_group,
                 needs_reply=c.needs_reply,
                 reply_waiting_at=c.reply_waiting_at,
+                unread_count=c.unread_count,
             )
             for c in chats
         ]
+    except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/chats/{chat_id}/context", response_model=ChatContextOut)
+def chat_hydra_context(chat_id: str) -> ChatContextOut:
+    from hydra.store import HydraMemoryStore
+    from services.hydra_generation import fetch_hydra_context_snippets_for_chat
+
+    reader = working_reader()
+    try:
+        chat = find_chat_for_suggestions(reader, chat_id=chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail=f"Chat {chat_id} not found")
+        snippets, chunk_count = fetch_hydra_context_snippets_for_chat(chat)
+        return ChatContextOut(
+            chat_id=chat_id,
+            context_snippets=snippets,
+            hydra_chunk_count=chunk_count,
+            context_sub_tenant_id=HydraMemoryStore.chat_sub_tenant_id(chat_id),
+        )
+    except SuggestionGenerationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -259,6 +302,7 @@ def chat_suggestions(
     chat_id: str,
     limit: int = Query(default=3, ge=1, le=5),
     refresh: bool = Query(default=False),
+    follow_up: bool = Query(default=False),
 ) -> ChatSuggestionsOut:
     reader = working_reader()
     try:
@@ -272,8 +316,26 @@ def chat_suggestions(
                 needs_reply=False,
                 reason="caught_up",
             )
-        suggestions = get_chat_suggestions(reader, chat, count=limit, refresh=refresh)
-        return ChatSuggestionsOut(chat_id=chat_id, suggestions=suggestions, needs_reply=True)
+        payload = get_chat_suggestions(
+            reader,
+            chat,
+            count=limit,
+            refresh=refresh,
+            follow_up=follow_up,
+        )
+        from hydra.store import HydraMemoryStore
+
+        return ChatSuggestionsOut(
+            chat_id=chat_id,
+            suggestions=payload.suggestions,
+            needs_reply=True,
+            context_snippets=payload.context_snippets,
+            hydra_chunk_count=payload.hydra_chunk_count,
+            context_chat_id=chat_id,
+            context_scoped_to_chat=not follow_up,
+            context_sub_tenant_id=HydraMemoryStore.chat_sub_tenant_id(chat_id) if not follow_up else None,
+            generation_source=payload.generation_source,
+        )
     except SuggestionGenerationError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except (FileNotFoundError, PermissionError, sqlite3.OperationalError) as exc:
@@ -319,6 +381,13 @@ def send_chat_message(chat_id: str, body: SendMessageIn) -> MessageOut:
     invalidate_all_suggestions()
 
     reader = working_reader()
+    try:
+        store = HydraMemoryStore()
+        if store.is_configured:
+            store.ingest_chat_thread(reader, chat_id, limit=60)
+    except Exception:
+        pass
+
     prefetch_top_priorities(reader, limit=3)
 
     return MessageOut(

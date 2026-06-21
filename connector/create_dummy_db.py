@@ -155,8 +155,9 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
                 "Work ran long and I might be 10 min late",
                 False,
                 now - timedelta(minutes=45),
-                False,
+                True,
             ),
+            ("No worries, see you at 7!", True, now - timedelta(minutes=20), True),
         ],
     )
 
@@ -170,12 +171,13 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
             ("Thanks mom!! Yes, roommates sang off-key at midnight", True, now - timedelta(days=2), True),
             ("😂 sounds about right. Dad says hi", False, now - timedelta(days=1, hours=6), True),
             (
-                "Call me when you get a chance. Nothing bad — "
+                "Call me when you get a chance. Nothing bad, "
                 "just want to hear how the new apartment is",
                 False,
                 now - timedelta(hours=4),
-                False,
+                True,
             ),
+            ("Will call you tonight after dinner!", True, now - timedelta(hours=2), True),
         ],
     )
 
@@ -187,13 +189,19 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         [
             ("Bro the game last night was insane", False, now - timedelta(days=1, hours=6), True),
             ("I know!! That last-minute goal", True, now - timedelta(days=1, hours=5), True),
-            ("We need tickets for the next one — they're dropping Friday", False, now - timedelta(hours=2), True),
+            ("We need tickets for the next one, they're dropping Friday", False, now - timedelta(hours=2), True),
             (
                 "Can you cover my shift Friday? I have a concert at the Fillmore "
                 "and I'm double-booked. I'll swap you Saturday AM",
                 False,
                 now - timedelta(minutes=90),
-                False,
+                True,
+            ),
+            (
+                "Sorry, can't cover Friday. Saturday AM is already booked for me",
+                True,
+                now - timedelta(minutes=30),
+                True,
             ),
         ],
     )
@@ -211,7 +219,7 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
                 "Please arrive 15 min early for paperwork. "
                 "Parking is in garage B, validation at front desk",
                 False,
-                now - timedelta(hours=20),
+                now - timedelta(days=1),
                 False,
             ),
         ],
@@ -232,7 +240,7 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
             ),
             ("Thanks for reaching out! Can you share comp range + team size?", True, now - timedelta(hours=5), True),
             (
-                "Absolutely — base is competitive plus equity. 30 min call this week? "
+                "Absolutely, base is competitive plus equity. 30 min call this week? "
                 "I have Thu 11am or Fri 2pm PT",
                 False,
                 now - timedelta(hours=1),
@@ -247,23 +255,174 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         dad_chat,
         dad_handle,
         [
-            ("How's the new place? Mom said the kitchen is tiny", False, now - timedelta(days=8), True),
-            ("Tiny but the light is great. Already hung shelves", True, now - timedelta(days=8), True),
+            (
+                "How's the move going? Mom wants to send the extra sheet set for the new bed",
+                False,
+                now - timedelta(days=21, hours=4),
+                True,
+            ),
+            (
+                "Almost done unpacking. Place is on 24th near Potrero, apt 4B. "
+                "Kitchen is tiny but the light is amazing",
+                True,
+                now - timedelta(days=21, hours=2),
+                True,
+            ),
+            (
+                "Good spot. Remember to update your address with DMV when you get a sec, "
+                "they mail registration stickers to whatever address they have on file",
+                False,
+                now - timedelta(days=20, hours=6),
+                True,
+            ),
+            ("On it. Also hung shelves in the bedroom already", True, now - timedelta(days=20, hours=4), True),
+            (
+                "Send photos when the living room is set up. Your mom keeps asking about the view",
+                False,
+                now - timedelta(days=18, hours=8),
+                True,
+            ),
+            (
+                "Will send this weekend. You can see the Bay from the bedroom window, it's wild",
+                True,
+                now - timedelta(days=18, hours=6),
+                True,
+            ),
+            (
+                "Proud of you for landing that SF place. Rent is nuts but the SoMa commute must be better",
+                False,
+                now - timedelta(days=17, hours=3),
+                True,
+            ),
+            ("22 bus gets me to the office in about 20 min now", True, now - timedelta(days=17, hours=2), True),
             (
                 "Your car registration on the Honda expires next month. "
                 "Don't wait till the last week like last year",
                 False,
+                now - timedelta(days=14, hours=5),
+                True,
+            ),
+            (
+                "Yeah still the 2019 Civic. I remember the rush fees last time, won't cut it close again",
+                True,
+                now - timedelta(days=14, hours=4),
+                True,
+            ),
+            (
+                "Smog check has to pass before you can renew online. "
+                "AAA on Stevens Creek still does walk-ins, no appointment",
+                False,
+                now - timedelta(days=13, hours=10),
+                True,
+            ),
+            ("The one next to Trader Joe's on Stevens Creek?", True, now - timedelta(days=13, hours=9), True),
+            (
+                "That's the one. Bring your AAA card, you're still on our family membership",
+                False,
+                now - timedelta(days=13, hours=8),
+                True,
+            ),
+            ("Still have the card in my wallet, thanks", True, now - timedelta(days=13, hours=7), True),
+            (
+                "How's the new place? Mom said the kitchen is tiny",
+                False,
+                now - timedelta(days=10, hours=2),
+                True,
+            ),
+            ("Tiny but workable. Already hung shelves and got the desk set up", True, now - timedelta(days=10, hours=1), True),
+            (
+                "Did you update DMV with the Potrero address yet? "
+                "Last year the sticker went to Millbrae and you had to chase it",
+                False,
+                now - timedelta(days=9, hours=6),
+                True,
+            ),
+            (
+                "Updated online last night. Used apt 4B like management said for USPS",
+                True,
+                now - timedelta(days=9, hours=4),
+                True,
+            ),
+            (
+                "Did the smog check yet? AAA on Stevens Creek still does walk-ins",
+                False,
+                now - timedelta(days=7, hours=12),
+                True,
+            ),
+            ("Not yet, planning Saturday morning around 9", True, now - timedelta(days=7, hours=10), True),
+            (
+                "Go before 10, lines get long on weekends. "
+                "Ask for the printout even if they say it's electronic",
+                False,
+                now - timedelta(days=7, hours=8),
+                True,
+            ),
+            (
+                "After smog passes, renewal is quick on dmv.ca.gov. "
+                "Have your odometer reading ready, I think you're around 48k",
+                False,
+                now - timedelta(days=6, hours=14),
+                True,
+            ),
+            ("Odometer was 48217 when I checked Tuesday", True, now - timedelta(days=6, hours=12), True),
+            (
+                "Sent you the DMV renewal link. Use the plate number ending in 442. "
+                "Insurance card photo is in the glove box if they ask",
+                False,
+                now - timedelta(days=5, hours=3),
+                True,
+            ),
+            (
+                "Got it, will use plate 442. Found the insurance photo in the glove box too",
+                True,
+                now - timedelta(days=5, hours=1),
+                True,
+            ),
+            (
+                "Saturday still the plan for smog? I can meet you for coffee at Philz on 24th after if you want",
+                False,
+                now - timedelta(days=4, hours=8),
+                True,
+            ),
+            (
+                "Still aiming for Saturday 9am at AAA. Coffee after sounds good",
+                True,
+                now - timedelta(days=4, hours=6),
+                True,
+            ),
+            (
+                "Late fee kicks in after the 15th if registration slips. "
+                "You know the plate ends in 442 right?",
+                False,
+                now - timedelta(days=3, hours=5),
+                True,
+            ),
+            ("Yep 442, Civic, odometer 48217. I have it all saved in Notes", True, now - timedelta(days=3, hours=3), True),
+            (
+                "Work ran long today so smog got pushed to tomorrow morning instead",
+                True,
+                now - timedelta(days=6),
+                True,
+            ),
+            (
+                "No worries. Just text when you're done. "
+                "Mom keeps asking if the car stuff is handled before we visit next month",
+                False,
+                now - timedelta(days=5, hours=6),
+                True,
+            ),
+            (
+                "Will take care of registration and smog tomorrow, promise. "
+                "Tell Mom I'll send apartment photos too",
+                True,
                 now - timedelta(days=5),
                 True,
             ),
-            ("Thanks for the heads up", True, now - timedelta(days=5), True),
-            ("Did the smog check yet? AAA on Stevens Creek still does walk-ins", False, now - timedelta(days=4, hours=12), True),
-            ("Not yet, planning Saturday morning", True, now - timedelta(days=4, hours=10), True),
             (
-                "Sent you the DMV link. Use the plate number ending in 442. "
-                "Insurance card photo is in the glove box if they ask",
+                "Did the smog check yet? Text me when you're done. "
+                "Mom is asking again and I told her you're on top of it",
                 False,
-                now - timedelta(days=4),
+                now - timedelta(days=3),
                 False,
             ),
         ],
@@ -275,14 +434,29 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         sarah_chat,
         sarah_handle,
         [
-            ("Reunion planning: who's in for July 4th weekend?", False, now - timedelta(days=2), True),
-            ("Count me in! Can bring the photo slideshow", True, now - timedelta(days=2), True),
-            ("Nice. Looking at Lake Tahoe vs Napa for Airbnb", False, now - timedelta(days=1, hours=6), True),
             (
-                "Venue options in the group doc — leaning toward Tahoe. "
+                "Reunion planning: who's in for July 4th weekend?",
+                False,
+                now - timedelta(days=4, hours=6),
+                True,
+            ),
+            (
+                "Count me in! Can bring the photo slideshow",
+                True,
+                now - timedelta(days=4, hours=5, minutes=40),
+                True,
+            ),
+            (
+                "Nice. Looking at Lake Tahoe vs Napa for Airbnb",
+                False,
+                now - timedelta(days=2, hours=14),
+                True,
+            ),
+            (
+                "Venue options in the group doc, leaning toward Tahoe. "
                 "Need headcount by Wed for the deposit",
                 False,
-                now - timedelta(days=1),
+                now - timedelta(days=1, hours=3),
                 False,
             ),
         ],
@@ -317,7 +491,7 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         work_chat,
         [
             ("Q4 planning doc is in Drive if anyone needs it", mike_handle, False, now - timedelta(hours=9), True),
-            ("Standup moved to 10:30 today — conflict with all-hands", priya_handle, False, now - timedelta(hours=7), True),
+            ("Standup moved to 10:30 today, conflict with all-hands", priya_handle, False, now - timedelta(hours=7), True),
             ("Got it", me_handle, True, now - timedelta(hours=6, minutes=50), True),
             (
                 "Can someone review the deck before 3pm? "
@@ -346,7 +520,7 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
         roommates_chat,
         [
             ("PG&E bill is $187 this month 😬", jess_handle, False, now - timedelta(days=2), True),
-            ("Rent is due Friday — Venmo me $950", jess_handle, False, now - timedelta(days=1), True),
+            ("Rent is due Friday, Venmo me $950", jess_handle, False, now - timedelta(days=1), True),
             ("Sent mine", me_handle, True, now - timedelta(hours=18), True),
             (
                 "Who's taking out trash this week? Recycling pickup is tomorrow AM",
@@ -364,15 +538,14 @@ def create_dummy_db(db_path: str = "dummy_chat.db") -> None:
     insert_group_messages(
         book_club_chat,
         [
-            ("This month's pick: Project Hail Mary — sci-fi but readable", lisa_handle, False, now - timedelta(days=4), True),
-            ("Loved that one! Rocky is the best", me_handle, True, now - timedelta(days=3), True),
-            ("I'm only on chapter 4 no spoilers pls", tom_handle, False, now - timedelta(days=2), True),
+            ("Loved that one! Rocky is the best", me_handle, True, now - timedelta(days=5), True),
+            ("I'm only on chapter 4 no spoilers pls", tom_handle, False, now - timedelta(days=4), True),
             (
                 "Discussion Sunday 4pm. Who's hosting? I can bring snacks "
                 "but my apartment is chaos",
                 tom_handle,
                 False,
-                now - timedelta(hours=14),
+                now - timedelta(days=3, hours=6),
                 False,
             ),
         ],

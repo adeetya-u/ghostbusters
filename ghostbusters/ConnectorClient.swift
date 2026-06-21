@@ -24,10 +24,40 @@ struct ChatSuggestionsResponse: Decodable {
     let suggestions: [String]
     let needs_reply: Bool?
     let reason: String?
+    let context_snippets: [String]?
+    let hydra_chunk_count: Int?
+    let context_chat_id: String?
+    let context_scoped_to_chat: Bool?
+    let context_sub_tenant_id: String?
+    let generation_source: String?
+}
+
+struct ChatContextResponse: Decodable {
+    let chat_id: String
+    let context_snippets: [String]
+    let hydra_chunk_count: Int?
+    let context_sub_tenant_id: String?
+}
+
+struct ConnectorAPIError: LocalizedError {
+    let statusCode: Int
+    let detail: String
+
+    var errorDescription: String? { detail }
+}
+
+extension Notification.Name {
+    static let inboxShouldRefresh = Notification.Name("ghostbusters.inboxShouldRefresh")
 }
 
 enum ConnectorClient {
-    static let baseURL = URL(string: "http://127.0.0.1:8787")!
+    static let baseURL: URL = {
+        if let urlString = Bundle.main.object(forInfoDictionaryKey: "ConnectorBaseURL") as? String,
+           let url = URL(string: urlString) {
+            return url
+        }
+        return URL(string: "http://127.0.0.1:8787")!
+    }()
 
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -42,16 +72,19 @@ enum ConnectorClient {
             URLQueryItem(name: "limit", value: "\(limit)")
         ])
         let (data, response) = try await session.data(from: url)
-        try validate(response)
+        try validate(response, data: data)
         return try JSONDecoder().decode([ChatSummary].self, from: data)
     }
 
-    static func fetchMessages(chatId: String, limit: Int = 50) async throws -> [MessageItem] {
-        let url = baseURL.appending(path: "api/chats/\(chatId)/messages").appending(queryItems: [
-            URLQueryItem(name: "limit", value: "\(limit)")
-        ])
-        let (data, response) = try await session.data(from: url)
-        try validate(response)
+    static func fetchMessages(chatId: String, limit: Int = 50, timeout: TimeInterval = 10) async throws -> [MessageItem] {
+        var request = URLRequest(
+            url: baseURL.appending(path: "api/chats/\(chatId)/messages").appending(queryItems: [
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ])
+        )
+        request.timeoutInterval = timeout
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
         return try JSONDecoder().decode([MessageItem].self, from: data)
     }
 
@@ -65,17 +98,39 @@ enum ConnectorClient {
         }
         let url = baseURL.appending(path: "api/priorities").appending(queryItems: items)
         let (data, response) = try await session.data(from: url)
-        try validate(response)
+        try validate(response, data: data)
         return try JSONDecoder().decode([PriorityItem].self, from: data)
     }
 
-    static func fetchReplySuggestions(chatId: String, limit: Int = 3) async throws -> ChatSuggestionsResponse {
-        let url = baseURL
-            .appending(path: "api/chats/\(chatId)/suggestions")
-            .appending(queryItems: [URLQueryItem(name: "limit", value: "\(limit)")])
-        let (data, response) = try await session.data(from: url)
-        try validate(response)
+    static func fetchReplySuggestions(
+        chatId: String,
+        limit: Int = 3,
+        followUp: Bool = false,
+        timeout: TimeInterval = 90
+    ) async throws -> ChatSuggestionsResponse {
+        var items = [
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        if followUp {
+            items.append(URLQueryItem(name: "follow_up", value: "true"))
+        }
+        var request = URLRequest(
+            url: baseURL
+                .appending(path: "api/chats/\(chatId)/suggestions")
+                .appending(queryItems: items)
+        )
+        request.timeoutInterval = followUp ? 30 : timeout
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
         return try JSONDecoder().decode(ChatSuggestionsResponse.self, from: data)
+    }
+
+    static func fetchHydraContext(chatId: String, timeout: TimeInterval = 90) async throws -> ChatContextResponse {
+        var request = URLRequest(url: baseURL.appending(path: "api/chats/\(chatId)/context"))
+        request.timeoutInterval = timeout
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(ChatContextResponse.self, from: data)
     }
 
     static func sendMessage(chatId: String, text: String) async throws -> MessageItem {
@@ -84,7 +139,7 @@ enum ConnectorClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(["text": text])
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, data: data)
         return try JSONDecoder().decode(MessageItem.self, from: data)
     }
 
@@ -94,8 +149,8 @@ enum ConnectorClient {
         ]))
         request.httpMethod = "POST"
         request.timeoutInterval = 10
-        let (_, response) = try await session.data(for: request)
-        try validate(response)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
     }
 
     static func fetchHydraLogs(limit: Int = 20) async throws -> HydraLogsResponse {
@@ -103,16 +158,25 @@ enum ConnectorClient {
             URLQueryItem(name: "limit", value: "\(limit)")
         ])
         let (data, response) = try await session.data(from: url)
-        try validate(response)
+        try validate(response, data: data)
         return try JSONDecoder().decode(HydraLogsResponse.self, from: data)
     }
 
-    private static func validate(_ response: URLResponse) throws {
+    private static func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         guard (200...299).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+            let detail: String
+            if let payload = try? JSONDecoder().decode([String: String].self, from: data),
+               let message = payload["detail"] {
+                detail = message
+            } else if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+                detail = text
+            } else {
+                detail = "Request failed (HTTP \(http.statusCode))."
+            }
+            throw ConnectorAPIError(statusCode: http.statusCode, detail: detail)
         }
     }
 }
@@ -138,6 +202,38 @@ enum Formatters {
             return "Yesterday"
         }
         return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    /// Bubble timestamp, e.g. "1:30 PM".
+    static func messageTime(_ iso: String) -> String {
+        guard let date = parseISO(iso) else { return "" }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    /// Centered day separator, e.g. "Today 1:30 PM".
+    static func daySeparator(_ iso: String) -> String {
+        guard let date = parseISO(iso) else { return "" }
+        let cal = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(date) {
+            return "Today \(time)"
+        }
+        if cal.isDateInYesterday(date) {
+            return "Yesterday \(time)"
+        }
+        let day = date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        return "\(day) \(time)"
+    }
+
+    static func isSameDay(_ lhs: String, _ rhs: String) -> Bool {
+        guard let left = parseISO(lhs), let right = parseISO(rhs) else { return false }
+        return Calendar.current.isDate(left, inSameDayAs: right)
+    }
+
+    static func dayKey(_ iso: String) -> String {
+        guard let date = parseISO(iso) else { return iso }
+        let day = Calendar.current.startOfDay(for: date)
+        return day.formatted(.iso8601.year().month().day())
     }
 
     /// Hours or days since a reply became needed (e.g. "2h", "3d").
